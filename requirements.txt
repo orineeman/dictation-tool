@@ -1,0 +1,6 @@
+mlx-whisper
+sounddevice
+soundfile
+pynput
+numpy
+pip-system-certs
