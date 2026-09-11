@@ -25,6 +25,11 @@ HOTKEY_KEYS = {Key.alt, Key.alt_l, Key.alt_r}  # any Option key (⌥)
 LANGUAGE = "he"
 
 kb_controller = KeyboardController()
+# Force pynput to inject text as literal Unicode characters instead of simulated
+# keycodes. Otherwise it types via the keyboard layout active when this process
+# started, so if Caps Lock later switches the system to the English layout, the
+# Hebrew text comes out transliterated by key position (e.g. ח -> j, ל -> k).
+kb_controller._mapping = {}
 
 recording = False
 audio_frames = []
