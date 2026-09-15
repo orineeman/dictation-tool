@@ -31,10 +31,18 @@ kb_controller = KeyboardController()
 # Hebrew text comes out transliterated by key position (e.g. ח -> j, ל -> k).
 kb_controller._mapping = {}
 
+HOTKEY_DEBOUNCE_SEC = 0.15  # delay before actually opening the mic; a real macOS shortcut
+                            # (Option+Left, Option+letter, ...) presses the second key almost
+                            # immediately, while real dictation is Option held, then a pause, then speech
+
 recording = False
 audio_frames = []
 lock = threading.Lock()
 suppress_hotkey = False  # true while we are injecting text, to ignore our own synthetic keystrokes
+other_key_pressed = False  # true if another key was pressed while Option was held (e.g. Option+Left to jump words) -
+                            # in that case Option is being used for its normal macOS role, not as our hotkey
+option_held = False  # true from Option press to Option release
+start_timer = None  # pending timer that will open the mic, unless cancelled by another key press first
 
 
 def audio_callback(indata, frames, time_info, status):
@@ -58,6 +66,22 @@ def start_recording():
     )
     current_stream.start()
     print("recording...")
+
+
+def cancel_recording():
+    """Stop the microphone and discard whatever was captured, without transcribing.
+    Used when Option was combined with another key (e.g. Option+Left), meaning it
+    was being used for its normal macOS role and not as our push-to-talk hotkey."""
+    global recording, current_stream
+    with lock:
+        if not recording:
+            return
+        recording = False
+    if current_stream is not None:
+        current_stream.stop()
+        current_stream.close()
+        current_stream = None
+    print("(cancelled - Option was used with another key)")
 
 
 def stop_recording_and_transcribe():
@@ -123,18 +147,49 @@ def copy_to_clipboard(text):
         print(f"clipboard copy also failed: {e}")
 
 
+def _debounced_start():
+    global start_timer
+    with lock:
+        if not option_held or other_key_pressed:
+            return
+        start_timer = None
+    start_recording()
+
+
 def on_press(key):
+    global other_key_pressed, option_held, start_timer
     if suppress_hotkey:
         return
     if key in HOTKEY_KEYS:
-        start_recording()
+        if option_held:
+            return  # key repeat while already held - ignore
+        option_held = True
+        other_key_pressed = False
+        start_timer = threading.Timer(HOTKEY_DEBOUNCE_SEC, _debounced_start)
+        start_timer.start()
+    elif option_held:
+        # some other key was pressed while Option is held down - this is Option being used
+        # for its normal macOS role (word-jump, special character, etc), not our hotkey
+        other_key_pressed = True
+        if start_timer is not None:
+            start_timer.cancel()
+            start_timer = None
 
 
 def on_release(key):
+    global other_key_pressed, option_held, start_timer
     if suppress_hotkey:
         return
     if key in HOTKEY_KEYS:
-        stop_recording_and_transcribe()
+        option_held = False
+        if start_timer is not None:
+            start_timer.cancel()
+            start_timer = None
+        if other_key_pressed:
+            other_key_pressed = False
+            cancel_recording()  # no-op if the mic was never actually opened
+        else:
+            stop_recording_and_transcribe()
 
 
 def main():
